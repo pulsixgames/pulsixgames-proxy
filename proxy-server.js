@@ -12,9 +12,11 @@
 //  JavaScript or logins (YouTube, Google sign-in, Discord...) will not fully work;
 //  for those, look at a service-worker proxy such as Ultraviolet or Scramjet.
 // =====================================================================
-const http = require('http');
-const dns  = require('dns').promises;
-const net  = require('net');
+const http  = require('http');
+const https = require('https');
+const zlib  = require('zlib');
+const dns   = require('dns').promises;
+const net   = require('net');
 
 const PORT = process.env.PORT || 8080;
 
@@ -22,11 +24,47 @@ const PORT = process.env.PORT || 8080;
 /* ---- safety: refuse addresses on this machine or its network ---- */
 const PRIVATE = /^(127\.|10\.|0\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|::1$|::$|fc|fd|fe80|::ffff:(127\.|10\.|0\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.))/i;
 
-async function allowed(url) {
-  if (!/^https?:$/.test(url.protocol)) return false;
-  const host = url.hostname.replace(/^\[|\]$/g, '');
-  const addrs = net.isIP(host) ? [{ address: host }] : await dns.lookup(host, { all: true });
-  return addrs.length > 0 && !addrs.some(a => PRIVATE.test(a.address));
+const DECODERS = { gzip: zlib.createGunzip, deflate: zlib.createInflate, br: zlib.createBrotliDecompress };
+const MAX_BYTES = 25 * 1024 * 1024;
+
+// fetches a page: looks the address up, refuses private ones, then connects to exactly that address
+// (IPv4 first, because many networks have no working IPv6)
+async function request(target, { method, headers, body }) {
+  const host = target.hostname.replace(/^\[|\]$/g, '');
+  const addrs = net.isIP(host) ? [{ address: host, family: net.isIP(host) }] : await dns.lookup(host, { all: true });
+  if (!addrs.length || addrs.some(a => PRIVATE.test(a.address))) throw new Error('That address is not allowed.');
+  const pick = addrs.find(a => a.family === 4) || addrs[0];
+
+  return new Promise((resolve, reject) => {
+    const req = (target.protocol === 'https:' ? https : http).request({
+      host: pick.address, family: pick.family, port: target.port || undefined,
+      path: target.pathname + target.search, method,
+      headers: { ...headers, host: target.host },
+      servername: net.isIP(host) ? undefined : host,   // so HTTPS still checks the real site name
+      timeout: 15000
+    }, res => {
+      const decode = DECODERS[(res.headers['content-encoding'] || '').toLowerCase()];
+      const stream = decode ? res.pipe(decode()) : res;
+      const chunks = [];
+      let size = 0;
+      stream.on('data', c => {
+        size += c.length;
+        if (size > MAX_BYTES) return req.destroy(new Error('That file is too big.'));
+        chunks.push(c);
+      });
+      stream.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks) }));
+      stream.on('error', reject);
+    });
+    req.on('timeout', () => req.destroy(new Error('The site took too long to answer.')));
+    req.on('error', reject);
+    req.end(body);
+  });
+}
+
+// page text, read with the character set the site says it uses
+function pageText(up) {
+  const cs = /charset=["']?([\w-]+)/i.exec(up.headers['content-type'] || '');
+  try { return new TextDecoder(cs ? cs[1] : 'utf-8').decode(up.body); } catch { return up.body.toString('utf8'); }
 }
 
 
@@ -125,7 +163,7 @@ http.createServer(async (req, res) => {
 
   try {
     const target = new URL(u.searchParams.get('url'));
-    if (!(await allowed(target))) return send(403, 'That address is not allowed.');
+    if (!/^https?:$/.test(target.protocol)) return send(403, 'That address is not allowed.');
 
     let body;
     if (!['GET', 'HEAD'].includes(req.method)) {
@@ -134,12 +172,13 @@ http.createServer(async (req, res) => {
       body = Buffer.concat(chunks);
     }
 
-    const up = await fetch(target, {
-      method: req.method, body, redirect: 'manual', signal: AbortSignal.timeout(15000),
+    const up = await request(target, {
+      method: req.method, body,
       headers: {
         'user-agent': req.headers['user-agent'] || 'Mozilla/5.0',
         'accept': req.headers.accept || '*/*',
         'accept-language': req.headers['accept-language'] || 'en',
+        'accept-encoding': 'gzip, deflate, br',
         'referer': target.origin + '/',
         ...(req.headers.range && { range: req.headers.range }),
         ...(req.headers['content-type'] && { 'content-type': req.headers['content-type'] })
@@ -147,24 +186,24 @@ http.createServer(async (req, res) => {
     });
 
     // redirects stay inside the proxy
-    const next = up.headers.get('location');
+    const next = up.headers.location;
     if (up.status >= 300 && up.status < 400 && next) {
       res.writeHead(302, { location: prox(new URL(next, target).href) });
       return res.end();
     }
 
     const headers = {};
-    up.headers.forEach((value, key) => { if (!DROP.has(key)) headers[key] = value; });
+    for (const [key, value] of Object.entries(up.headers)) if (!DROP.has(key)) headers[key] = Array.isArray(value) ? value.join(', ') : value;
 
-    const type = up.headers.get('content-type') || '';
-    let out;
-    if (type.includes('text/html'))     out = rewriteHtml(await up.text(), target.href, prox);
-    else if (type.includes('text/css')) out = rewriteCss(await up.text(), target.href, prox);
-    else                                out = Buffer.from(await up.arrayBuffer());
+    const type = up.headers['content-type'] || '';
+    let out = up.body;
+    if (type.includes('text/html'))     { out = rewriteHtml(pageText(up), target.href, prox); headers['content-type'] = 'text/html; charset=utf-8'; }
+    else if (type.includes('text/css')) { out = rewriteCss(pageText(up), target.href, prox);  headers['content-type'] = 'text/css; charset=utf-8'; }
 
     res.writeHead(up.status, headers);
     res.end(out);
   } catch (e) {
-    send(502, 'Could not load that page: ' + e.message);
+    // e.code says what went wrong, e.g. ENOTFOUND = no such site, ETIMEDOUT = it never answered
+    send(502, 'Could not load that page: ' + e.message + (e.code ? ` (${e.code})` : ''));
   }
 }).listen(PORT, () => console.log(`Proxy running on http://localhost:${PORT}`));
