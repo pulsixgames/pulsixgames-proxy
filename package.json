@@ -1,0 +1,8 @@
+{
+  "name": "pulsix-proxy",
+  "version": "1.0.0",
+  "description": "Proxy server for proxy.html",
+  "main": "proxy-server.js",
+  "scripts": { "start": "node proxy-server.js" },
+  "engines": { "node": ">=18" }
+}
