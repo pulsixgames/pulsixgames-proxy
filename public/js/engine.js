@@ -177,23 +177,30 @@ class ScramjetSession {
         return this.#frame.element;
     }
     go(url) {
-        if (this.#destroyed)
-            return;
+    if (this.#destroyed)
+        return;
+
+    this.url = url;
+    this.#handlers.loading?.();
+    this.#frame.go(url);
+}
+
+back() {
+    if (!this.#destroyed)
+        this.#frame.back();
+}
+
+forward() {
+    if (!this.#destroyed)
+        this.#frame.forward();
+}
+
+reload() {
+    if (!this.#destroyed && this.url) {
         this.#handlers.loading?.();
-        this.#frame.go(url);
+        this.#frame.go(this.url);
     }
-    back() {
-        if (!this.#destroyed)
-            this.#frame.back();
-    }
-    forward() {
-        if (!this.#destroyed)
-            this.#frame.forward();
-    }
-    reload() {
-        if (!this.#destroyed)
-            this.#frame.reload();
-    }
+}
     destroy() {
         if (this.#destroyed)
             return;
