@@ -1,9 +1,8 @@
-# Tells Render how to run the proxy (Render: New > Blueprint > pick your repo)
 services:
   - type: web
     name: pulsix-proxy
     runtime: node
     plan: free
     buildCommand: npm install
-    startCommand: node proxy-server.js
-    healthCheckPath: /ping
+    startCommand: node server.js
+    healthCheckPath: /
