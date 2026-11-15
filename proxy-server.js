@@ -115,11 +115,61 @@ function clientScript(base, prefix) {
     const d = Object.getOwnPropertyDescriptor(proto.prototype, prop);
     if (d && d.set) Object.defineProperty(proto.prototype, prop, { ...d, set(v) { d.set.call(this, fix(String(v))); } });
   }
-  const winOpen = window.open;
-  window.open = (u, ...rest) => winOpen.call(window, u ? fix(u) : u, ...rest);
 
-  // tell the proxy page which real address this is (it shows it in the address bar and keeps back / forward)
-  parent.postMessage({ proxyUrl: base }, '*');
+  // ---- talking to the proxy page (it shows each page in its own tab) ----
+  const tell = msg => { try { parent.postMessage(msg, '*'); } catch (e) {} };
+  const real = u => { const a = new URL(u, base).href; return a.startsWith(prefix) ? decodeURIComponent(a.slice(prefix.length)) : a; };
+  const openTab = (u, background) => {
+    try { const url = real(u); if (/^https?:\/\//i.test(url)) tell({ proxyMsg: 'open', url, bg: !!background }); } catch (e) {}
+  };
+
+  // window.open() becomes a new tab (only after a real click or key press, like a pop-up blocker)
+  window.open = u => {
+    if (u && (!navigator.userActivation || navigator.userActivation.isActive)) openTab(u, false);
+    return null;
+  };
+
+  // target="_blank", Ctrl + click and middle click become new tabs; normal clicks stay in this tab
+  const onLink = e => {
+    const a = e.target.closest && e.target.closest('a[href]');
+    if (!a || e.defaultPrevented) return;
+    if (/^_(top|parent)$/i.test(a.target)) a.target = '_self';
+    const modifier = e.ctrlKey || e.metaKey || e.button === 1;
+    if (!modifier && !/^_blank$/i.test(a.target)) return;
+    e.preventDefault();
+    openTab(a.href, modifier);
+  };
+  document.addEventListener('click', onLink, true);
+  document.addEventListener('auxclick', e => { if (e.button === 1) onLink(e); }, true);
+
+  // tab shortcuts still work while the page has the keyboard focus
+  document.addEventListener('keydown', e => {
+    const k = e.key.toLowerCase();
+    if (((e.ctrlKey || e.metaKey) && /^(t|w|l|r|tab)$/.test(k)) || (e.altKey && /^(t|w|arrowleft|arrowright)$/.test(k))) {
+      e.preventDefault();
+      tell({ proxyMsg: 'key', key: e.key, shift: e.shiftKey, alt: e.altKey });
+    }
+  }, true);
+
+  // page title + favicon (the proxy page cannot read them itself, so we send them)
+  const icon = () => { const l = document.querySelector('link[rel~="icon"]'); return fix(l ? l.getAttribute('href') : '/favicon.ico'); };
+  const report = () => tell({ proxyMsg: 'page', url: base, title: document.title, icon: icon() });
+  document.addEventListener('DOMContentLoaded', () => {
+    report();
+    const t = document.querySelector('title');
+    if (t) new MutationObserver(report).observe(t, { childList: true, characterData: true, subtree: true });
+  });
+  window.addEventListener('load', report);
+}
+
+const json = v => JSON.stringify(v).replace(/</g, '\\u003c');
+const escapeHtml = t => String(t).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+
+function errorPage(message, url) {
+  return `<!doctype html><meta charset="utf-8"><title>Could not load page</title>
+<body style="font:16px system-ui,sans-serif;background:#111;color:#eee;display:grid;place-content:center;height:100vh;margin:0;text-align:center">
+<div><h2>Could not load this page</h2><p style="color:#aaa;max-width:420px">${escapeHtml(message)}</p></div>
+<script>parent.postMessage({ proxyMsg: 'error', url: ${json(url)}, message: ${json(message)} }, '*')</script>`;
 }
 
 function rewriteHtml(html, base, prox) {
@@ -149,6 +199,10 @@ http.createServer(async (req, res) => {
   const send = (code, text) => { res.writeHead(code, { 'content-type': 'text/plain; charset=utf-8' }); res.end(text); };
 
   const u = new URL(req.url, self);
+  const fail = (code, message) => {
+    res.writeHead(code, { 'content-type': 'text/html; charset=utf-8' });
+    res.end(errorPage(message, u.searchParams.get('url') || ''));
+  };
   if (u.pathname === '/ping') { res.writeHead(200, { 'access-control-allow-origin': '*' }); return res.end('ok'); }
 
   if (u.pathname !== '/proxy') {
@@ -163,7 +217,7 @@ http.createServer(async (req, res) => {
 
   try {
     const target = new URL(u.searchParams.get('url'));
-    if (!/^https?:$/.test(target.protocol)) return send(403, 'That address is not allowed.');
+    if (!/^https?:$/.test(target.protocol)) return fail(403, 'That address is not allowed.');
 
     let body;
     if (!['GET', 'HEAD'].includes(req.method)) {
@@ -204,6 +258,6 @@ http.createServer(async (req, res) => {
     res.end(out);
   } catch (e) {
     // e.code says what went wrong, e.g. ENOTFOUND = no such site, ETIMEDOUT = it never answered
-    send(502, 'Could not load that page: ' + e.message + (e.code ? ` (${e.code})` : ''));
+    fail(502, 'Could not load that page: ' + e.message + (e.code ? ` (${e.code})` : ''));
   }
 }).listen(PORT, () => console.log(`Proxy running on http://localhost:${PORT}`));
