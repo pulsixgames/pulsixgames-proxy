@@ -176,6 +176,7 @@ html[data-theme=pulsix] .btn.ghost { background: rgba(47,47,47,.07); }
 .view iframe { display: none; position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #fff; }
 .view iframe.on { display: block; animation: fadein .3s ease both; }
 .view iframe.frame--active {  display: block; animation: fadein .3s ease both;}
+.view iframe.frame--active:not(.has-page) {display: none;}
 @keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
 .view.busy::after { content: ""; position: absolute; top: 0; left: 0; width: 40%; height: 3px; z-index: 6; background: var(--mint); animation: slide 1s ease-in-out infinite; }
 @keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
