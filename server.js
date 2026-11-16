@@ -8,11 +8,6 @@ import { server as wisp } from "@mercuryworkshop/wisp-js/server";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const staticRoot = path.join(__dirname, "public");
 const app = express();
-app.use((_req, res, next) => {
-    res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
-    res.setHeader("Cross-Origin-Embedder-Policy", "require-corp");
-    next();
-});
 const require = createRequire(import.meta.url);
 const dirOf = (specifier) => path.dirname(require.resolve(specifier));
 app.use("/scram/", express.static(scramjetPath));
