@@ -277,7 +277,7 @@ document.addEventListener("keydown", event => {
 });
 
 // Status
-$("#status").textContent = "Scramjet ready";
+$("#status").textContent = "Proxy ready";
 $("#status-dot").className = "dot green";
 
 // Start with one empty tab
