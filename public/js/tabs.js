@@ -82,7 +82,8 @@ export class Tab {
         if (this.#destroyed)
             return;
         this.element.removeAttribute("srcdoc");
-        const session = await this.ensureSession();
+this.element.classList.add("has-page");
+const session = await this.ensureSession();
         if (this.#destroyed) {
             session.destroy();
             return;
