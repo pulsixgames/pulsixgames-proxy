@@ -23,7 +23,7 @@ export class Tab {
         this.element.className = "frame";
         this.element.dataset.tabId = this.id;
         this.element.setAttribute("sandbox", "allow-forms allow-modals allow-popups allow-presentation allow-same-origin allow-scripts allow-downloads");
-        this.element.setAttribute("allow", "autoplay; fullscreen; clipboard-read; clipboard-write");
+        this.element.setAttribute("allow", "autoplay; fullscreen; clipboard-read; clipboard-write; encrypted-media; picture-in-picture");
     }
     async ensureSession() {
         if (this.session)
